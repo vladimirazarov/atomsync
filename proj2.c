@@ -19,7 +19,7 @@ typedef struct
 void validateInput(int argc, char **argv);
 int isDigit(char *str);
 void queuePush(queue *q, int element);
-int queuePop(queue *q, int type);
+int queuePop(queue *q);
 void queueCtr(queue *q);
 queue *queueDtr(queue *q);
 
@@ -62,6 +62,7 @@ int main(int argc, char **argv)
 	int TI = atoi(argv[3]);
 	int TB = atoi(argv[4]);
 	pid_t pid;
+	int status;
 
 	srand((unsigned)time(NULL));
 
@@ -78,12 +79,12 @@ int main(int argc, char **argv)
 	*noM = 1;
 
 	// index is the process num, value is the status
-	// 0 ... initialized and places into queue
-	// 1 ... in process of creating molecule
-	// 2 ... used in molecule creating
+	// 0 ... initialized and placed into queue
+	// 1 ... used in molecule creating
+	// 2 ... is being used in molecule creating
+
 	int *oxyStatus = SHARED_MEM_INT(NO + 1);
 	int *hydroStatus = SHARED_MEM_INT(NH + 1);
-
 	int *forkingO = SHARED_MEM_INT(1);
 	int *forkingH = SHARED_MEM_INT(1);
 
@@ -126,41 +127,88 @@ int main(int argc, char **argv)
 	// Process forked from main process that will initialaze oxygen atoms
 	if (pid == 0)
 	{
-		*forkingO = true;
 		for (int i = 0; i < NO; i++)
 		{
 			pid = fork();
 			if (pid == 0)
 			{
+				// Will change shared variables, use semaphore
 				sem_wait(semInit);
+
 				// Initialize idO of this process
 				int idO = *oxyCurID;
 				printf("%d: O %d: started\n", *actionN, idO);
-
-				// Will change shared variables, use semaphore
 				// Increment shared actionN
 				(*actionN)++;
 				// Increment shared oxyCurID
 				(*oxyCurID)++;
+
+				sem_post(semInit);
+
+				// sleep, while sleeping other processes can come into action
+				usleep(randInt(0, TI));
+
+				sem_wait(semInit);
+
+				// changing shared queue and status, use semaphore
+				printf("%d: O %d: going to queue\n", *actionN, idO);
+				(*actionN)++;
+				// push into queue
+				queuePush(oxyQ, idO);
 				// Update status
 				oxyStatus[idO] = 0;
 				sem_post(semInit);
 
-				// sleep
-				usleep(randInt(0, TI));
+				while(1)
+				{
+					//printf("IDO %d\n", oxyStatus[idO]);
+					//printf("oxyQ len %d\n", oxyQ->len);
+					//signal that molecule was used
+					if (oxyStatus[idO] == 1)
+					{
+						// changing shared actionN
+						sem_wait(semInit);
+						printf("%d: O %d: molecule %d created\n", *actionN, idO, *noM);
+						(*actionN)++;
+						(*noM)++;
+						sem_post(semInit);
+						sem_post(semMol);
+						exit (0);
+					}
 
-				// changing shared queue and status, use semaphore
-				sem_wait(semInit);
-				printf("%d: O %d: going to queue\n", *actionN, idO);
-				queuePush(oxyQ, idO);
-				sem_post(semInit);
-				while(1);
+					//signal that molecule will be used
+					if (oxyStatus[idO] == 2)
+					{
+						sem_wait(semInit);
+						printf("%d: O %d: creating molecule %d\n", *actionN, idO, *noM);
+						(*actionN)++;
+						sem_post(semInit);
+						usleep(randInt(0, TB));
+						sem_wait(semInit);
+						oxyStatus[idO] = 1;
+						sem_post(semInit);
+						continue;
+					}
+
+					if (oxyQ->len >= 1)	
+					{
+					sem_wait(semMol);
+					sem_wait(semQ);
+					int poppedO = queuePop(oxyQ);
+					int poppedH1 = queuePop(hydroQ);
+					int poppedH2 = queuePop(hydroQ);
+					sem_post(semQ);
+					oxyStatus[poppedO] = 2;
+					hydroStatus[poppedH1] = 2;
+					hydroStatus[poppedH2] = 2;
+					}
+
+				}
 				exit(0);
 			}
-			else
-				printf("this ps %d, parent %d\n", getpid(), getppid());
 		}
-		*forkingO = false;
+		while(wait(NULL)>0);
+		exit(EXIT_SUCCESS);
 	}
 	// Main process resumed, fork process that will initialize hydrogen atoms
 	else
@@ -168,7 +216,6 @@ int main(int argc, char **argv)
 		pid = fork();
 		if (pid == 0)
 		{
-			*forkingH = true;
 			for (int i = 0; i < NH; i++)
 			{
 				pid = fork();
@@ -177,17 +224,15 @@ int main(int argc, char **argv)
 					sem_wait(semInit);
 					printf("Created H\n");
 					sem_post(semInit);
-					while(1);
 					exit(1);
 				}
 			}
-			*forkingH = false;
+			while(wait(NULL)>0);
+			exit(EXIT_SUCCESS);
 		}
 		else
 		{
-			while(1);
-			while (wait(NULL) > 0 || *forkingH == true || *forkingO == true)
-				;
+			while (wait(&status) > 0);
 			queuePrint(oxyQ);
 			exit(0);
 		}
@@ -293,15 +338,10 @@ void queuePrint(queue *q)
 // Return its value
 // if len is lesser than 2 (not enough hydrogen), return -2
 // if len is lesser than 1 (not enough oxygen), return -1
-// type ... 1 - oxyQ,
-// type ... 2 - hydroQ
-int queuePop(queue *q, int type)
+int queuePop(queue *q)
 {
-	if (q->len < 2 && type == 2)
-		return -2;
-	if (q->len < 1 && type == 1)
+	if (q->len <=0)
 		return -1;
-
 	int popped = q->data[q->len - 1];
 	q->len--;
 	return popped;
