@@ -1,3 +1,15 @@
+/**************************************************************************
+  * Project name: IOS project 2
+  * File: proj2.c
+  * Date: 4/17/2022
+  * Last change: 4/17/2022
+  * Author: Vladimir Azarov xazaro00@vutbr.cz
+  * Author's university login: xazaro00
+  *
+  * Description: Second semester VUT FIT operating system class project.
+  * Main concepts: IPC, shared memory, semaphores, file handling, 
+  * process synchronization.
+  *************************************************************************/
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
@@ -9,10 +21,12 @@
 #include <time.h>
 #include <stdbool.h>
 
-// queue type
+// Queue type
 typedef struct
 {
+	// Length of the queue
 	int len;
+	// Data pointer, an array of integers 
 	int *data;
 } queue;
 
@@ -23,28 +37,29 @@ void queuePush(queue *q, int element);
 int queuePop(queue *q);
 void queueCtr(queue *q);
 queue *queueDtr(queue *q);
-
 void queuePrint(queue *q);
 
-// Global variables
+// semInit semaphore manages oxyCurId, hydroCurId and actionN variables.
 sem_t *semInit = NULL;
+// semMol and semCreating semaphores manage molecule creating state.
 sem_t *semMol = NULL;
 sem_t *semCreating = NULL;
+// semQ semaphore manages popping and pushing elemnts to/from queues. 
 sem_t *semQ = NULL;
 FILE *fOutPtr;
 
-// out .. ptr to var
-// create shared mem variable
+// Shared memory integer, parameter count defines number of integers to allocate.
 #define SHARED_MEM_INT(count) mmap(NULL, sizeof(int) * (count), \
 								   PROT_READ | PROT_WRITE,      \
 								   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-
+// Shared memory queue, parameter count defines maximum number of integers queue can contain.
 #define SHARED_MEM_QUEUE(size) mmap(NULL, sizeof(queue) + sizeof(int *) + sizeof(int) * (size), \
 									PROT_READ | PROT_WRITE,                                     \
 									MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-
+// Random integer generator macro.
 #define randInt(min, max) (rand() % (max - min + 1) + min)
 
+// Semaphores names strings.
 #define SEM_INIT_FILENAME "/semInit.xazaro00"
 #define SEM_MOLECULE_FILENAME "/semMol.xazaro00"
 #define SEM_QUEUE_FILENAME "/semQ.xazaro00"
@@ -171,7 +186,6 @@ int main(int argc, char **argv)
 				sem_wait(semInit);
 				// Initialize idO of this process
 				int idO = *oxyCurID;
-				// printf("%d: O %d: started\n", *actionN, idO);
 				fprintf(fOutPtr, "%d: O %d: started\n", *actionN, idO);
 				// Increment shared actionN
 				(*actionN)++;
@@ -182,84 +196,80 @@ int main(int argc, char **argv)
 				// sleep, while sleeping other processes can come into action
 				usleep(randInt(0, TI));
 
-				sem_wait(semInit);
 				// changing shared queue and status, use semaphore
+				sem_wait(semInit);
 				fprintf(fOutPtr, "%d: O %d: going to queue\n", *actionN, idO);
-				printf("%d: O %d: going to queue\n", *actionN, idO);
 				(*actionN)++;
 				sem_post(semInit);
-				// push into queue
+
+				// push into queue, using semaphore semQ
 				sem_wait(semQ);
 				queuePush(oxyQ, idO);
 				sem_post(semQ);
 
+				// loop in which process is waiting for signals
+				// oxygen processes also manage molecule creating state
 				while (1)
 				{
+					// If we dont have enough H left
 					if ((NH - *hydrosUsed) < 2)
 					{
 						sem_wait(semInit);
-						printf("%d: O %d: not enough H\n", *actionN, idO);
 						fprintf(fOutPtr, "%d: O %d: not enough H\n", *actionN, idO);
 						(*actionN)++;
 						sem_post(semInit);
 						exit(EXIT_SUCCESS);
 					}
 
+					// creating molecule O state
 					if (oxyStatus[idO] == 2)
 					{
 						sem_wait(semInit);
-						// printf("Oxygen number %d received signal %d\n", idO, oxyStatus[idO]);
-						printf("%d: O %d: creating molecule %d\n", *actionN, idO, *noM);
 						fprintf(fOutPtr, "%d: O %d: creating molecule %d\n", *actionN, idO, *noM);
 						(*actionN)++;
 						sem_post(semInit);
-						// wait for oxygens to print "creating molecule"
-						while ((hydroStatus[*poppedH1] != 4) || (hydroStatus[*poppedH2] != 4))
-							;
-
+						// wait for signal from hydrogen atoms that state "creating molecule" was processed 
+						while ((hydroStatus[*poppedH1] != 4) || (hydroStatus[*poppedH2] != 4));
+						// creating molecule sleep
 						usleep(randInt(0, TB));
-
+						// send signal for hydrogen to print "molecule created"
 						hydroStatus[*poppedH1] = 1;
 						hydroStatus[*poppedH2] = 1;
-						// signal for hydrogen to print "molecule created"
-						// printf("Oxygen number %d sent signal 1 to hydro number %d\n", idO, poppedH1);
-						// ANOTHER PROCESS DONT KNOW H1!!
-						// printf("Oxygen number %d sent signal 1 to hydro number %d\n", idO, poppedH2);
 
-						// wait for signal from H that printed: molecule created
+						// wait for signal from hydrogen atoms that state "molecule created" was processed 
 						while ((hydroStatus[*poppedH1] != 5) || (hydroStatus[*poppedH2] != 5))
 							;
 						*hydrosUsed = *hydrosUsed + 2;
 						*oxysUsed = *oxysUsed + 1;
 						sem_wait(semInit);
-						printf("%d: O %d: molecule %d created\n", *actionN, idO, *noM);
 						fprintf(fOutPtr, "%d: O %d: molecule %d created\n", *actionN, idO, *noM);
 						(*actionN)++;
 						(*noM)++;
 						sem_post(semInit);
-						// printf("hydros used %d, NH is %d\n", *hydrosUsed, NH);
 						*molBeingCreat = false;
 						sem_post(semCreating);
 						exit(EXIT_SUCCESS);
 					}
 
+					// Use semaphore, so 2 oxygen atoms cant simultaneously be 
+					// inside of this if statement
 					sem_wait(semMol);
 					if (((oxyQ->len) >= 1) && ((hydroQ->len) >= 2) && *molBeingCreat == false)
 					{
 						*molBeingCreat = true;
 						sem_wait(semCreating);
+
 						*poppedO = queuePop(oxyQ);
-						// signal for oxygen to print "creating molecule"
+						// signal for oxygen to go into state "creating molecule"
 						oxyStatus[*poppedO] = 2;
-						// printf("Oxygen number %d sent signal 2 to oxygen number %d\n", idO, poppedO);
 
 						*poppedH1 = queuePop(hydroQ);
+						// signal for hydrogen to go into state "creating molecule"
 						hydroStatus[*poppedH1] = 2;
-						// printf("Oxygen number %d sent signal 2 to hydro number %d\n", idO, poppedH1);
 
 						*poppedH2 = queuePop(hydroQ);
+						// signal for hydrogen to go into state "creating molecule"
 						hydroStatus[*poppedH2] = 2;
-						// printf("Oxygen number %d sent signal 2 to hydro number %d\n", idO, poppedH2);
 					}
 					sem_post(semMol);
 				}
@@ -270,6 +280,8 @@ int main(int argc, char **argv)
 				exit(EXIT_FAILURE);
 			}
 		}
+		// process that creates oxygen atoms is waiting for it's 
+		// children to end
 		while (wait(NULL) > 0)
 			;
 		exit(EXIT_SUCCESS);
@@ -295,7 +307,6 @@ int main(int argc, char **argv)
 					// Initialize idO of this process
 					int idH = *hydroCurID;
 					bool printedCreating = false;
-					printf("%d: H %d: started\n", *actionN, idH);
 					fprintf(fOutPtr, "%d: H %d: started\n", *actionN, idH);
 					// Increment shared actionN
 					(*actionN)++;
@@ -308,7 +319,6 @@ int main(int argc, char **argv)
 
 					sem_wait(semInit);
 					// changing shared queue and status, use semaphore
-					printf("%d: H %d: going to queue\n", *actionN, idH);
 					fprintf(fOutPtr, "%d: H %d: going to queue\n", *actionN, idH);
 					(*actionN)++;
 					sem_post(semInit);
@@ -320,12 +330,11 @@ int main(int argc, char **argv)
 
 					while (1)
 					{
-						// signal that molecule was created
+						// signal that hydrogen atom was used in creating molecule, so it 
+						// can fall into state "molecule created" and exit 
 						if (hydroStatus[idH] == 1)
 						{
-							// printf("Hydrogen number %d received signal %d\n", idH, hydroStatus[idH]);
 							sem_wait(semInit);
-							printf("%d: H %d: molecule %d created\n", *actionN, idH, *noM);
 							fprintf(fOutPtr, "%d: H %d: molecule %d created\n", *actionN, idH, *noM);
 							(*actionN)++;
 							hydroStatus[idH] = 5;
@@ -333,12 +342,11 @@ int main(int argc, char **argv)
 							exit(EXIT_SUCCESS);
 						}
 
-						// signal that molecule was freed from queue
+						// signal that this hydrogen atom was freed from queue, so it
+						// can fall into state "creating molecule"
 						if (hydroStatus[idH] == 2 && printedCreating == false)
 						{
-							// printf("Hydrogen number %d received signal %d\n", idH, hydroStatus[idH]);
 							sem_wait(semInit);
-							printf("%d: H %d: creating molecule %d\n", *actionN, idH, *noM);
 							fprintf(fOutPtr, "%d: H %d: creating molecule %d\n", *actionN, idH, *noM);
 							(*actionN)++;
 							printedCreating = true;
@@ -346,9 +354,10 @@ int main(int argc, char **argv)
 							sem_post(semInit);
 						}
 
+						// check if we have enough hydrogen or oxygen to create new molecule
+						// if not, this hydrogen atom wont be used and we can exit from this process 
 						if ((NH - *hydrosUsed) < 2 || (NO - *oxysUsed) < 1)
 						{
-							printf("%d: H %d: not enough O or H\n", *actionN, idH);
 							fprintf(fOutPtr, "%d: H %d: not enough O or H\n", *actionN, idH);
 							(*actionN)++;
 							exit(EXIT_SUCCESS);
@@ -361,6 +370,8 @@ int main(int argc, char **argv)
 					exit(EXIT_FAILURE);
 				}
 			}
+			// process that creates hydrogen atoms is waiting for it's 
+			// children to end
 			while (wait(NULL) > 0)
 				;
 			exit(EXIT_SUCCESS);
@@ -372,9 +383,10 @@ int main(int argc, char **argv)
 		}
 		else
 		{
+			// main process wait for all children to end
 			while (wait(NULL) > 0);
-
-			// Free all allocated recourses 
+			// if all children has terminated, 
+			// free all allocated recourses 
 			munmap(oxyStatus, sizeof(int) * (NO + 1));
 			munmap(hydroStatus, sizeof(int) * (NH + 1));
 			munmap(actionN, sizeof(int));
@@ -399,8 +411,6 @@ int main(int argc, char **argv)
 			sem_destroy(semQ);
 			fclose(fOutPtr);
 
-			for (int i = 0; i < 100; i++)
-			printf("END\n");
 			exit(0);
 		}
 	}
@@ -450,7 +460,6 @@ void validateInput(int argc, char **argv)
 	if (NO < 0)
 	{
 		fprintf(stderr, "ERROR: Invalid number of oxygen\n");
-		printf("%d\n", NO);
 		exit(EXIT_FAILURE);
 	}
 
@@ -476,16 +485,20 @@ void validateInput(int argc, char **argv)
 	}
 }
 
-// Queue constructor function. Sets length to 0.
-// And sets up pointer to data. Space for data is preallocated
-// in shared memory.
+/* 
+  Queue constructor function. Sets length to 0.
+  And sets up pointer to data. Space for data is preallocated
+  in shared memory.
+*/
 void queueCtr(queue *q)
 {
 	q->len = 0;
 	q->data = (int *)q + sizeof(int);
 }
-// Queue push, increase length and
-// put an element. Space for data is preallocated in shared memory.
+/* 
+	Queue push, increase length and
+	put an element. Space for data is preallocated in shared memory.
+*/
 void queuePush(queue *q, int element)
 {
 	q->len++;
@@ -496,8 +509,10 @@ void queuePush(queue *q, int element)
 	q->data[0] = element;
 }
 
-// Pop an element from the end of the queue and return its value.
-// if len is lesser than 0, return -1.
+/*
+	Pop an element from the end of the queue and return its value.
+	if len is lesser than 0, return -1.
+*/
 int queuePop(queue *q)
 {
 	if (q->len <= 0)
@@ -507,6 +522,4 @@ int queuePop(queue *q)
 	return popped;
 }
 
-void cleanup()
-{
-}
+// The end of the file proj2.c
