@@ -151,25 +151,25 @@ int main(int argc, char **argv)
 	semInit = sem_open(SEM_INIT_FILENAME, O_CREAT, 0660, 1);
 	if (semInit == SEM_FAILED)
 	{
-		fprintf(stderr, "ERROR: Couldn't initialize semaphore.");
+		fprintf(stderr, "ERROR: Couldn't initialize semaphore.\n");
 		exit(EXIT_FAILURE);
 	}
 	semMol = sem_open(SEM_MOLECULE_FILENAME, O_CREAT, 0660, 1);
 	if (semMol == SEM_FAILED)
 	{
-		fprintf(stderr, "ERROR: Couldn't initialize semaphore.");
+		fprintf(stderr, "ERROR: Couldn't initialize semaphore.\n");
 		exit(EXIT_FAILURE);
 	}
 	semQ = sem_open(SEM_QUEUE_FILENAME, O_CREAT, 0660, 1);
 	if (semQ == SEM_FAILED)
 	{
-		fprintf(stderr, "ERROR: Couldn't initialize semaphore.");
+		fprintf(stderr, "ERROR: Couldn't initialize semaphore.\n");
 		exit(EXIT_FAILURE);
 	}
 	semCreating = sem_open(SEM_CREATING_FILENAME, O_CREAT, 0660, 1);
 	if (semCreating == SEM_FAILED)
 	{
-		fprintf(stderr, "ERROR: Couldn't initialize semaphore.");
+		fprintf(stderr, "ERROR: Couldn't initialize semaphore.\n");
 		exit(EXIT_FAILURE);
 	}
 
