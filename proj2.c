@@ -114,7 +114,7 @@ int main(int argc, char **argv)
 	*/
 	int *oxyStatus = SHARED_MEM_INT(NO + 1);
 	int *hydroStatus = SHARED_MEM_INT(NH + 1);
-	for (int i = 1; i < NH + 1; i++)
+		for (int i = 1; i < NH + 1; i++)
 	{
 		hydroStatus[i] = 0;
 		oxyStatus[i] = 0;
@@ -136,6 +136,10 @@ int main(int argc, char **argv)
 	int *poppedH1 = SHARED_MEM_INT(1);
 	int *poppedH2 = SHARED_MEM_INT(1);
 	int *poppedO = SHARED_MEM_INT(1);
+	// Shared variable sigkill. Will terminate all processes if at least one fork()
+	// had no success. sigKill = 0 - ok. sigKill = -1 - error occurred.
+	int *sigKill = SHARED_MEM_INT(1);
+		*sigKill = 0;
 	// Queues of oxygens and hydrogens, shared data structures.
 	queue *oxyQ = SHARED_MEM_QUEUE(NO);
 	queue *hydroQ = SHARED_MEM_QUEUE(NH);
@@ -211,6 +215,8 @@ int main(int argc, char **argv)
 				// oxygen processes also manage molecule creating state
 				while (1)
 				{
+					if (*sigKill < 0)
+							exit(EXIT_SUCCESS);
 					// If we dont have enough H left
 					if ((NH - *hydrosUsed) < 2)
 					{
@@ -277,6 +283,7 @@ int main(int argc, char **argv)
 			else if (pid == -1)
 			{
 				fprintf(stderr, "ERROR: Couldn't fork\n");
+				*sigKill = -1;
 				exit(EXIT_FAILURE);
 			}
 		}
@@ -289,6 +296,7 @@ int main(int argc, char **argv)
 	else if (pid == -1)
 	{
 		fprintf(stderr, "ERROR: Couldn't fork\n");
+		*sigKill = -1;
 		exit(EXIT_FAILURE);
 	}
 	// Main process resumed, fork process that will initialize hydrogen atoms
@@ -330,6 +338,8 @@ int main(int argc, char **argv)
 
 					while (1)
 					{
+						if (*sigKill < 0)
+							exit(EXIT_SUCCESS);
 						// signal that hydrogen atom was used in creating molecule, so it 
 						// can fall into state "molecule created" and exit 
 						if (hydroStatus[idH] == 1)
@@ -367,6 +377,7 @@ int main(int argc, char **argv)
 				else if (pid == -1)
 				{
 					fprintf(stderr, "ERROR: Couldn't fork\n");
+					*sigKill = -1;
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -379,6 +390,7 @@ int main(int argc, char **argv)
 		else if (pid == -1)
 		{
 			fprintf(stderr, "ERROR: Couldn't fork\n");
+			*sigKill = -1;
 			exit(EXIT_FAILURE);
 		}
 		else
@@ -399,16 +411,17 @@ int main(int argc, char **argv)
 			munmap(poppedH1, sizeof(int));
 			munmap(poppedH2, sizeof(int));
 			munmap(poppedO, sizeof(int));
+			munmap(sigKill, sizeof(int));
 			munmap(oxyQ, sizeof(int) * NO);
 			munmap(hydroQ, sizeof(int) * NH);
-			sem_close(semInit);
 			sem_destroy(semInit);
-			sem_close(semCreating);
+			sem_close(semInit);
 			sem_destroy(semCreating);
-			sem_close(semMol);
+			sem_close(semCreating);
 			sem_destroy(semMol);
-			sem_close(semQ);
+			sem_close(semMol);
 			sem_destroy(semQ);
+			sem_close(semQ);
 			fclose(fOutPtr);
 
 			exit(0);
