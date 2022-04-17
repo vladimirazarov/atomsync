@@ -36,7 +36,7 @@ sem_t *semQ = NULL;
 								   PROT_READ | PROT_WRITE,      \
 								   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 
-#define SHARED_MEM_QUEUE(size) mmap(NULL, sizeof(queue) + sizeof(int) * (size), \
+#define SHARED_MEM_QUEUE(size) mmap(NULL, sizeof(queue) + sizeof(int*) + sizeof(int) * (size), \
 									PROT_READ | PROT_WRITE,                     \
 									MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 
@@ -79,14 +79,24 @@ int main(int argc, char **argv)
 	*noM = 1;
 
 	// index is the process num, value is the status
-	// 0 ... initialized and placed into queue
-	// 1 ... used in molecule creating
-	// 2 ... is being used in molecule creating
+	// 0 ... no actions were executed
+	// 1 ... started using molecule
+	// 2 ... ended using molecule
 
 	int *oxyStatus = SHARED_MEM_INT(NO + 1);
 	int *hydroStatus = SHARED_MEM_INT(NH + 1);
-	int *forkingO = SHARED_MEM_INT(1);
-	int *forkingH = SHARED_MEM_INT(1);
+	for (int i = 1; i < NH + 1; i++)
+	{
+		hydroStatus[i] = 0;
+		oxyStatus[i] = 0;
+	}
+
+	int *molBeingCreat = SHARED_MEM_INT(1);
+	*molBeingCreat = false;
+	int *howManyHydroLeft = SHARED_MEM_INT(1);
+	*howManyHydroLeft = NH;
+	int *hydrosUsed = SHARED_MEM_INT(1);
+	*hydrosUsed = 0;
 
 	queue *oxyQ = SHARED_MEM_QUEUE(NO);
 	queue *hydroQ = SHARED_MEM_QUEUE(NH);
@@ -118,11 +128,6 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	// printf("%d: O %d: creating molecule %d\n", *actionN, poppedO, *noM);
-	// printf("%d: O %d: started\n", *actionN, idO);
-	// printf("%d: O %d: going to queue\n", *actionN, idO);
-	// printf("%d: O %d: molecule %d created\n", *actionN, poppedO, *noM);
-
 	pid = fork();
 	// Process forked from main process that will initialaze oxygen atoms
 	if (pid == 0)
@@ -132,9 +137,13 @@ int main(int argc, char **argv)
 			pid = fork();
 			if (pid == 0)
 			{
-				// Will change shared variables, use semaphore
-				sem_wait(semInit);
+				int poppedO;
+				int poppedH1;
+				int poppedH2;
 
+				// Will change shared variables, use semaphore
+
+				sem_wait(semInit);
 				// Initialize idO of this process
 				int idO = *oxyCurID;
 				printf("%d: O %d: started\n", *actionN, idO);
@@ -142,72 +151,75 @@ int main(int argc, char **argv)
 				(*actionN)++;
 				// Increment shared oxyCurID
 				(*oxyCurID)++;
-
 				sem_post(semInit);
 
 				// sleep, while sleeping other processes can come into action
 				usleep(randInt(0, TI));
 
 				sem_wait(semInit);
-
 				// changing shared queue and status, use semaphore
 				printf("%d: O %d: going to queue\n", *actionN, idO);
 				(*actionN)++;
 				// push into queue
 				queuePush(oxyQ, idO);
-				// Update status
-				oxyStatus[idO] = 0;
 				sem_post(semInit);
 
-				while(1)
+				while (1)
 				{
-					//printf("IDO %d\n", oxyStatus[idO]);
-					//printf("oxyQ len %d\n", oxyQ->len);
-					//signal that molecule was used
-					if (oxyStatus[idO] == 1)
+					if ((NH - *hydrosUsed) < 2)
 					{
-						// changing shared actionN
 						sem_wait(semInit);
-						printf("%d: O %d: molecule %d created\n", *actionN, idO, *noM);
+						printf("%d: O %d: not enough H\n", *actionN, idO);
 						(*actionN)++;
-						(*noM)++;
 						sem_post(semInit);
-						sem_post(semMol);
-						exit (0);
+						exit(EXIT_SUCCESS);
 					}
-
-					//signal that molecule will be used
 					if (oxyStatus[idO] == 2)
 					{
+						printf("Oxygen number %d received signal %d\n", idO, oxyStatus[idO]);
 						sem_wait(semInit);
 						printf("%d: O %d: creating molecule %d\n", *actionN, idO, *noM);
 						(*actionN)++;
 						sem_post(semInit);
+
 						usleep(randInt(0, TB));
+						// signal for hydrogen to print "molecule created"
+						hydroStatus[poppedH1] = 1;
+						hydroStatus[poppedH2] = 1;
+						printf("%d: O %d: molecule %d created\n", *actionN, idO, *noM);
 						sem_wait(semInit);
-						oxyStatus[idO] = 1;
+						(*actionN)++;
+						(*noM)++;
 						sem_post(semInit);
-						continue;
+						*molBeingCreat = false;
+						*hydrosUsed = *hydrosUsed + 2;
+						sem_post(semMol);
+						exit(EXIT_SUCCESS);
 					}
 
-					if (oxyQ->len >= 1)	
-					{
 					sem_wait(semMol);
-					sem_wait(semQ);
-					int poppedO = queuePop(oxyQ);
-					int poppedH1 = queuePop(hydroQ);
-					int poppedH2 = queuePop(hydroQ);
-					sem_post(semQ);
-					oxyStatus[poppedO] = 2;
-					hydroStatus[poppedH1] = 2;
-					hydroStatus[poppedH2] = 2;
+					if (((oxyQ->len) >= 1) && ((hydroQ->len) >= 2))
+					{
+						poppedO = queuePop(oxyQ);
+						// signal for oxygen to print "creating molecule"
+						oxyStatus[poppedO] = 2;
+						printf("Oxygen number %d sent signal 2 to oxygen number %d\n", idO, poppedO);
+
+						poppedH1 = queuePop(hydroQ);
+						hydroStatus[poppedH1] = 2;
+						printf("Oxygen number %d sent signal 2 to hydro number %d\n", idO, poppedH1);
+
+						poppedH2 = queuePop(hydroQ);
+						hydroStatus[poppedH2] = 2;
+						printf("Oxygen number %d sent signal 2 to hydro number %d\n", idO, poppedH2);
+
 					}
 
 				}
-				exit(0);
 			}
 		}
-		while(wait(NULL)>0);
+		while (wait(NULL) > 0)
+			;
 		exit(EXIT_SUCCESS);
 	}
 	// Main process resumed, fork process that will initialize hydrogen atoms
@@ -221,13 +233,69 @@ int main(int argc, char **argv)
 				pid = fork();
 				if (pid == 0)
 				{
+					// Will change shared variables, use semaphore
 					sem_wait(semInit);
-					printf("Created H\n");
+					// Initialize idO of this process
+					int idH = *hydroCurID;
+					int thisProcessMolN;
+					bool printedCreating = false;
+					bool printedCreated = false;
+					printf("%d: H %d: started\n", *actionN, idH);
+					// Increment shared actionN
+					(*actionN)++;
+					// Increment shared oxyCurID
+					(*hydroCurID)++;
 					sem_post(semInit);
-					exit(1);
+
+					// sleep, while sleeping other processes can come into action
+					usleep(randInt(0, TI));
+
+					sem_wait(semInit);
+					// changing shared queue and status, use semaphore
+					printf("%d: H %d: going to queue\n", *actionN, idH);
+					(*actionN)++;
+					// push into queue
+					queuePush(hydroQ, idH);
+					sem_post(semInit);
+
+					while (1)
+					{
+						// signal that molecule was created
+						if (hydroStatus[idH] == 1 && printedCreated == false)
+						{
+							printf("Hydrogen number %d received signal %d\n", idH, hydroStatus[idH]);
+							sem_wait(semInit);
+							printf("%d: H %d: molecule %d created\n", *actionN, idH, thisProcessMolN);
+							printedCreated = true;
+							(*actionN)++;
+							sem_post(semInit);
+							exit(EXIT_SUCCESS);
+						}
+
+						// signal that molecule was freed from queue
+						if (hydroStatus[idH] == 2 && printedCreating == false)
+						{
+							printf("Hydrogen number %d received signal %d\n", idH, hydroStatus[idH]);
+							thisProcessMolN = *noM;
+							sem_wait(semInit);
+							printf("%d: H %d: creating molecule %d\n", *actionN, idH, thisProcessMolN);
+							printedCreating = true;
+							(*actionN)++;
+							sem_post(semInit);
+						}
+
+						if ((NH - *hydrosUsed) < 2)
+						{
+							sem_wait(semInit);
+							printf("%d: H %d: not enough O or H\n", *actionN, idH);
+							(*actionN)++;
+							sem_post(semInit);
+							exit(EXIT_SUCCESS);
+						}
+					}
 				}
 			}
-			while(wait(NULL)>0);
+			while (wait(NULL) > 0);
 			exit(EXIT_SUCCESS);
 		}
 		else
@@ -340,7 +408,7 @@ void queuePrint(queue *q)
 // if len is lesser than 1 (not enough oxygen), return -1
 int queuePop(queue *q)
 {
-	if (q->len <=0)
+	if (q->len <= 0)
 		return -1;
 	int popped = q->data[q->len - 1];
 	q->len--;
